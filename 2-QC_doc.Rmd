@@ -1,0 +1,635 @@
+---
+title: "QC document"
+author: "Fredrik Landfors"
+date: "12/2/2020"
+output:
+  github_document:
+    toc: true
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+# Set global options
+knitr::opts_chunk$set(echo = TRUE, warning = TRUE)
+```
+
+Source libraries and functions:
+```{r}
+source("./src/check_packages.R")
+check_packages(
+  cran_packages = c("ggplot2", "naniar", "UpSetR"),
+  bioc_packages = c("ropls")
+)
+library(ggplot2)
+source("./src/plot_pca.R")
+source("./src/geom_cwise_boxplot.R")
+source("./src/geom_rwise_boxplot.R")
+```
+
+Load data:
+```{r}
+load("~/projekt_data/2019-11-19_SCD-FIA3_data/rData/markdown.RData")
+```
+
+# QC: Proximity extension assay
+
+Get data:
+```{r}
+qc <- list()
+preanalytic_factors <- c(
+  "Patient_code",
+  "FIAnum_FIA3",
+  "Set_FIA3",
+  "Sample_date",
+  "case_freeze_thawed",
+  "Fast_sample",
+  "Age", 
+  "Sex"
+)
+randomization_factors <- c(
+  "Glc_0h",
+  "Chol_tot",
+  "BMI",
+  "Smoker_2fct",
+  "Sbt_VIP",
+  "Case_control"
+)
+qc$inf <- merge(
+  x = preproc$raw_fia$data_out[c(preanalytic_factors, randomization_factors)],
+  y = preproc$raw_inf$data_out,
+  by = "Patient_code"
+)
+qc$org <- merge(
+  x = preproc$raw_fia$data_out[c(preanalytic_factors, randomization_factors)],
+  y = preproc$raw_org$data_out,
+  by = "Patient_code"
+)
+qc$fia <- merge(
+  x = preproc$raw_org$data_out["Patient_code"],
+  y = preproc$raw_fia$data_out[c("Patient_code", "Case_control", imp_fia_vars)],
+  by = "Patient_code"
+)
+qc$org_proteins <- names(preproc$raw_org$data_out)[
+  names(preproc$raw_org$data_out) %in% preproc$raw_org$varmeta_data$name1
+]
+qc$inf_proteins <- names(preproc$raw_inf$data_out)[
+  names(preproc$raw_inf$data_out) %in% preproc$raw_inf$varmeta_data$name1
+]
+```
+
+## Olink ORGAN DAMAGE (v.3311)
+
+### A. Missing values
+```{r}
+naniar::vis_miss(qc$org)
+```
+
+### B. Lower limit of detection (LOD)
+
+Values with > 5 % of values below LOD were excluded from further analysis. This reduced the count of proteins by 39 from 92 to 53.
+```{r}
+length(qc$org_proteins)
+length(preproc$raw_org$varmeta_data$name1)
+length(preproc$raw_org$varmeta_data$name1) - length(qc$org_proteins)
+```
+
+### C. Batch effects
+
+PCA colored for plate ID
+```{r}
+plot_pca(
+      x = qc$org[, qc$org_proteins],
+      c = qc$org["Plate_ID_2"],
+      opt_ellipse = "auto",
+      return_fit = FALSE,
+      n_pc = 7
+)
+```
+
+PLS model 
+```{r}
+# ropls::opls(
+#   x = qc$org[, qc$org_proteins],
+#   y = qc$org[, "Plate_ID_2"]
+# )
+```
+PLS model: force two predictive components because first model did not pass permutation test
+```{r}
+ropls::opls(
+  x = qc$org[, qc$org_proteins],
+  y = qc$org[, "Plate_ID_2"],
+  predI = 2
+)
+```
+
+### D. Preanalytic effects
+
+#### Freeze-thaw cycles
+```{r}
+plot_pca(
+      x = qc$org[, qc$org_proteins],
+      c = qc$org["case_freeze_thawed"],
+      opt_ellipse = "auto",
+      return_fit = FALSE,
+      n_pc = 7
+)
+```
+```{r}
+pls1 <- ropls::opls(
+  x = qc$org[, qc$org_proteins],
+  y = qc$org[, "case_freeze_thawed"]
+)
+ropls::plot(pls1, typeVc = "xy-weight")
+```
+
+#### Fasting
+```{r}
+plot_pca(
+      x = qc$org[, qc$org_proteins],
+      c = qc$org["Fast_sample"],
+      opt_ellipse = "auto",
+      return_fit = FALSE,
+      n_pc = 7
+)
+```
+```{r}
+pls2 <- ropls::opls(
+  x = qc$org[, qc$org_proteins],
+  y = qc$org[, "Fast_sample"],
+  predI = 2
+)
+```
+
+#### Sample date
+```{r}
+plot_pca(
+      x = qc$org[, qc$org_proteins],
+      c = qc$org["Sample_date"],
+      opt_ellipse = "auto",
+      return_fit = FALSE,
+      n_pc = 7
+)
+```
+```{r}
+pls3 <- ropls::opls(
+  x = qc$org[, qc$org_proteins],
+  y = sapply(
+    qc$org[, "Sample_date"] ,
+      function(x) {
+        round(((as.numeric(x) - 6159) / 365.25 + 1986.86242), 0)
+      }
+    )
+)
+ropls::plot(pls3, typeVc = "xy-weight")
+```
+
+#### Age at sampling
+```{r}
+plot_pca(
+      x = qc$org[, qc$org_proteins],
+      c = qc$org["Age"],
+      opt_ellipse = "auto",
+      return_fit = FALSE,
+      n_pc = 7
+)
+```
+```{r}
+pls4 <- ropls::opls(
+  x = qc$org[, qc$org_proteins],
+  y = qc$org[, "Age"]
+)
+ropls::plot(pls4, typeVc = "xy-weight")
+```
+
+#### Sex
+```{r}
+plot_pca(
+      x = qc$org[, qc$org_proteins],
+      c = qc$org["Sex"],
+      opt_ellipse = "auto",
+      return_fit = FALSE,
+      n_pc = 7
+)
+```
+```{r}
+pls4 <- ropls::opls(
+  x = qc$org[, qc$org_proteins],
+  y = qc$org[, "Sex"]
+)
+ropls::plot(pls4, typeVc = "xy-weight")
+```
+
+### E. Olink QC flag
+
+Looking at QC-flagged samples in plates 1-5 (coloured blue):
+
+```{r}
+geom_rwise_boxplot(
+      x = subset(qc$org, Plate_ID_2 == "FIA3_2-ORG-1", select = qc$org_proteins),
+      fill1 = qc$org$QC_Warning_2
+)
+geom_rwise_boxplot(
+      x = subset(qc$org, Plate_ID_2 == "FIA3_2-ORG-2", select = qc$org_proteins),
+      fill1 = qc$org$QC_Warning_2
+)
+geom_rwise_boxplot(
+      x = subset(qc$org, Plate_ID_2 == "FIA3_2-ORG-3", select = qc$org_proteins),
+      fill1 = qc$org$QC_Warning_2
+)
+geom_rwise_boxplot(
+      x = subset(qc$org, Plate_ID_2 == "FIA3_2-ORG-4", select = qc$org_proteins),
+      fill1 = qc$org$QC_Warning_2
+)
+geom_rwise_boxplot(
+      x = subset(qc$org, Plate_ID_2 == "FIA3_2-ORG-5", select = qc$org_proteins),
+      fill1 = qc$org$QC_Warning_2
+)
+```
+
+### F. Plate randomization
+
+Checks if case/ctrl pairs were analyzed on the same plates
+```{r}
+table(table(subset(qc$org, Plate_ID_2 == "FIA3_2-ORG-1", select = "Set_FIA3")) == 2)
+table(table(subset(qc$org, Plate_ID_2 == "FIA3_2-ORG-2", select = "Set_FIA3")) == 2)
+table(table(subset(qc$org, Plate_ID_2 == "FIA3_2-ORG-3", select = "Set_FIA3")) == 2)
+table(table(subset(qc$org, Plate_ID_2 == "FIA3_2-ORG-4", select = "Set_FIA3")) == 2)
+table(table(subset(qc$org, Plate_ID_2 == "FIA3_2-ORG-5", select = "Set_FIA3")) == 2)
+```
+
+Check covariate randomization across plates
+```{r}
+# BMI
+anova(lm(formula = BMI ~ Plate_ID_2, data = qc$org))
+# Total cholesterol
+anova(lm(formula = Chol_tot ~ Plate_ID_2, data = qc$org))
+# Systolic blood pressure
+anova(lm(formula = Sbt_VIP ~ Plate_ID_2, data = qc$org))
+summary(lm(formula = Sbt_VIP ~ Plate_ID_2, data = qc$org))
+# Glucose
+anova(lm(formula = Glc_0h ~ Plate_ID_2, data = qc$org))
+# Smoking status
+table(qc$org[c("Smoker_2fct", "Plate_ID_2")])
+chisq.test(table(qc$org[c("Smoker_2fct", "Plate_ID_2")]))
+```
+
+Check pre-analytic factor randomization across plates
+```{r}
+# Sample date
+anova(lm(formula = as.numeric(Sample_date) ~ Plate_ID_2, data = qc$org))
+summary(lm(formula = as.numeric(Sample_date) ~ Plate_ID_2, data = qc$org))
+# Fasting
+table(qc$org[c("Fast_sample", "Plate_ID_2")])
+chisq.test(table(qc$org[c("Fast_sample", "Plate_ID_2")]))
+table(table(subset(qc$org, Fast_sample == "0-4h", select = "Set_FIA3")) == 2)
+table(table(subset(qc$org, Fast_sample == "4-6h", select = "Set_FIA3")) == 2)
+table(table(subset(qc$org, Fast_sample == "6-8h", select = "Set_FIA3")) == 2)
+table(table(subset(qc$org, Fast_sample == ">8h", select = "Set_FIA3")) == 2)
+# Freeze/thaw status
+table(qc$org[c("case_freeze_thawed", "Plate_ID_2")])
+chisq.test(table(qc$org[c("case_freeze_thawed", "Plate_ID_2")]))
+table(table(subset(qc$org, case_freeze_thawed == "NO", select = "Set_FIA3")) == 2)
+table(table(subset(qc$org, case_freeze_thawed == "ONCE", select = "Set_FIA3")) == 2)
+table(table(subset(qc$org, case_freeze_thawed == "Thawed due to broken freezer but still cold", select = "Set_FIA3")) == 2)
+table(table(subset(qc$org, case_freeze_thawed == "TWICE", select = "Set_FIA3")) == 2)
+```
+
+Case control matching was perfect for freeze/thaw cycles, but not for fasting time.
+
+Check fasting time overlap using a UpSet plot.
+```{r}
+qc_split <- split(
+  qc$org[c(preanalytic_factors, randomization_factors)],
+  f = qc$org$Case_control
+)
+qc_overlap <- merge(
+  x = qc_split$Ctrl[c("Set_FIA3", "Fast_sample")],
+  y = qc_split$Case[c("Set_FIA3", "Fast_sample")],
+  by = "Set_FIA3"
+)
+names(qc_overlap) <- c("Set_FIA3", "ctrl_", "case_")
+qc_overlap2 <- data.frame(
+  qc_overlap["Set_FIA3"],
+  model.matrix(~ ctrl_ - 1, data = qc_overlap["ctrl_"]),
+  model.matrix(~ case_ - 1, data = qc_overlap["case_"])
+)
+UpSetR::upset(
+  qc_overlap2,
+  #nsets = 8, 
+  sets = c("ctrl_0.4h",
+           "case_0.4h",
+           "ctrl_4.6h",
+           "case_4.6h",
+           "ctrl_6.8h",
+           "case_6.8h",
+           "ctrl_.8h",
+           "case_.8h"),
+  keep.order = TRUE
+)
+```
+Conclusion: 12 pairs where fasted subjects were matched with recently fed subjects.
+
+## Olink INFLAMMATION (v.3021)
+
+### A. Missing values
+```{r}
+naniar::vis_miss(qc$inf)
+```
+
+### B. Lower limit of detection (LOD)
+
+Values with > 5 % of values below LOD were excluded from further analysis. This reduced the count of proteins by 23 from 92 to 69.
+```{r}
+length(qc$inf_proteins)
+length(preproc$raw_inf$varmeta_data$name1)
+length(preproc$raw_inf$varmeta_data$name1) - length(qc$inf_proteins)
+```
+
+### C. Batch effects
+
+PCA colored for plate ID
+```{r}
+plot_pca(
+      x = qc$inf[, qc$inf_proteins],
+      c = qc$inf["Plate_ID_1"],
+      opt_ellipse = "auto",
+      return_fit = FALSE,
+      n_pc = 7
+)
+```
+
+PLS model 
+```{r}
+# ropls::opls(
+#   x = qc$inf[, qc$inf_proteins],
+#   y = qc$inf[, "Plate_ID_1"]
+# )
+```
+PLS model: force two predictive components
+```{r}
+ropls::opls(
+  x = qc$inf[, qc$inf_proteins],
+  y = qc$inf[, "Plate_ID_1"],
+  predI = 2
+)
+```
+
+### D. Preanalytic effects
+
+#### Freeze-thaw cycles
+```{r}
+plot_pca(
+      x = qc$inf[, qc$inf_proteins],
+      c = qc$inf["case_freeze_thawed"],
+      opt_ellipse = "auto",
+      return_fit = FALSE,
+      n_pc = 7
+)
+```
+```{r}
+pls1 <- ropls::opls(
+  x = qc$inf[, qc$inf_proteins],
+  y = qc$inf[, "case_freeze_thawed"]
+)
+ropls::plot(pls1, typeVc = "xy-weight")
+```
+
+#### Fasting
+```{r}
+plot_pca(
+      x = qc$inf[, qc$inf_proteins],
+      c = qc$inf["Fast_sample"],
+      opt_ellipse = "auto",
+      return_fit = FALSE,
+      n_pc = 7
+)
+```
+```{r}
+pls2 <- ropls::opls(
+  x = qc$inf[, qc$inf_proteins],
+  y = qc$inf[, "Fast_sample"],
+  predI = 2
+)
+```
+
+#### Sample date
+```{r}
+plot_pca(
+      x = qc$inf[, qc$inf_proteins],
+      c = qc$inf["Sample_date"],
+      opt_ellipse = "auto",
+      return_fit = FALSE,
+      n_pc = 7
+)
+```
+```{r}
+pls3 <- ropls::opls(
+  x = qc$inf[, qc$inf_proteins],
+  y = sapply(
+    qc$inf[, "Sample_date"] ,
+      function(x) {
+        round(((as.numeric(x) - 6159) / 365.25 + 1986.86242), 0)
+      }
+    )
+)
+ropls::plot(pls3, typeVc = "xy-weight")
+```
+
+#### Age at sampling
+```{r}
+plot_pca(
+      x = qc$inf[, qc$inf_proteins],
+      c = qc$inf["Age"],
+      opt_ellipse = "auto",
+      return_fit = FALSE,
+      n_pc = 7
+)
+```
+```{r}
+pls4 <- ropls::opls(
+  x = qc$inf[, qc$inf_proteins],
+  y = qc$inf[, "Age"]
+)
+ropls::plot(pls4, typeVc = "xy-weight")
+```
+
+#### Sex
+```{r}
+plot_pca(
+      x = qc$inf[, qc$inf_proteins],
+      c = qc$inf["Sex"],
+      opt_ellipse = "auto",
+      return_fit = FALSE,
+      n_pc = 7
+)
+```
+```{r}
+pls4 <- ropls::opls(
+  x = qc$inf[, qc$inf_proteins],
+  y = qc$inf[, "Sex"]
+)
+ropls::plot(pls4, typeVc = "xy-weight")
+```
+
+### E. Olink QC flag
+
+Looking at QC-flagged samples in plates 1-5 (coloured blue):
+
+```{r}
+geom_rwise_boxplot(
+      x = subset(qc$inf, Plate_ID_1 == "FIA3_2-INF-1", select = qc$inf_proteins),
+      fill1 = qc$inf$QC_Warning_1
+)
+geom_rwise_boxplot(
+      x = subset(qc$inf, Plate_ID_1 == "FIA3_2-INF-2", select = qc$inf_proteins),
+      fill1 = qc$inf$QC_Warning_1
+)
+geom_rwise_boxplot(
+      x = subset(qc$inf, Plate_ID_1 == "FIA3_2-INF-3", select = qc$inf_proteins),
+      fill1 = qc$inf$QC_Warning_1
+)
+geom_rwise_boxplot(
+      x = subset(qc$inf, Plate_ID_1 == "FIA3_2-INF-4", select = qc$inf_proteins),
+      fill1 = qc$inf$QC_Warning_1
+)
+geom_rwise_boxplot(
+      x = subset(qc$inf, Plate_ID_1 == "FIA3_2-INF5", select = qc$inf_proteins),
+      fill1 = qc$inf$QC_Warning_1
+)
+```
+
+### F. Plate randomization
+
+Checks if case/ctrl pairs were analyzed on the same plates
+```{r}
+table(table(subset(qc$inf, Plate_ID_1 == "FIA3_2-INF-1", select = "Set_FIA3")) == 2)
+table(table(subset(qc$inf, Plate_ID_1 == "FIA3_2-INF-2", select = "Set_FIA3")) == 2)
+table(table(subset(qc$inf, Plate_ID_1 == "FIA3_2-INF-3", select = "Set_FIA3")) == 2)
+table(table(subset(qc$inf, Plate_ID_1 == "FIA3_2-INF-4", select = "Set_FIA3")) == 2)
+table(table(subset(qc$inf, Plate_ID_1 == "FIA3_2-INF5", select = "Set_FIA3")) == 2)
+```
+
+Check covariate randomization across plates
+```{r}
+# BMI
+anova(lm(formula = BMI ~ Plate_ID_1, data = qc$inf))
+# Total cholesterol
+anova(lm(formula = Chol_tot ~ Plate_ID_1, data = qc$inf))
+# Systolic blood pressure
+anova(lm(formula = Sbt_VIP ~ Plate_ID_1, data = qc$inf))
+summary(lm(formula = Sbt_VIP ~ Plate_ID_1, data = qc$inf))
+# Glucose
+anova(lm(formula = Glc_0h ~ Plate_ID_1, data = qc$inf))
+# Smoking status
+table(qc$inf[c("Smoker_2fct", "Plate_ID_1")])
+chisq.test(table(qc$inf[c("Smoker_2fct", "Plate_ID_1")]))
+```
+
+Check pre-analytic factor randomization across plates
+```{r}
+# Sample date
+anova(lm(formula = as.numeric(Sample_date) ~ Plate_ID_1, data = qc$inf))
+summary(lm(formula = as.numeric(Sample_date) ~ Plate_ID_1, data = qc$inf))
+# Fasting
+table(qc$inf[c("Fast_sample", "Plate_ID_1")])
+chisq.test(table(qc$inf[c("Fast_sample", "Plate_ID_1")]))
+table(table(subset(qc$inf, Fast_sample == "0-4h", select = "Set_FIA3")) == 2)
+table(table(subset(qc$inf, Fast_sample == "4-6h", select = "Set_FIA3")) == 2)
+table(table(subset(qc$inf, Fast_sample == "6-8h", select = "Set_FIA3")) == 2)
+table(table(subset(qc$inf, Fast_sample == ">8h", select = "Set_FIA3")) == 2)
+# Freeze/thaw status
+table(qc$inf[c("case_freeze_thawed", "Plate_ID_1")])
+chisq.test(table(qc$inf[c("case_freeze_thawed", "Plate_ID_1")]))
+table(table(subset(qc$inf, case_freeze_thawed == "NO", select = "Set_FIA3")) == 2)
+table(table(subset(qc$inf, case_freeze_thawed == "ONCE", select = "Set_FIA3")) == 2)
+table(table(subset(qc$inf, case_freeze_thawed == "Thawed due to broken freezer but still cold", select = "Set_FIA3")) == 2)
+table(table(subset(qc$inf, case_freeze_thawed == "TWICE", select = "Set_FIA3")) == 2)
+```
+
+Case control matching was perfect for freeze/thaw cycles, but not for fasting time.
+
+Check fasting time overlap using a UpSet plot.
+```{r}
+qc_split <- split(
+  qc$inf[c(preanalytic_factors, randomization_factors)],
+  f = qc$inf$Case_control
+)
+qc_overlap <- merge(
+  x = qc_split$Ctrl[c("Set_FIA3", "Fast_sample")],
+  y = qc_split$Case[c("Set_FIA3", "Fast_sample")],
+  by = "Set_FIA3"
+)
+names(qc_overlap) <- c("Set_FIA3", "ctrl_", "case_")
+qc_overlap2 <- data.frame(
+  qc_overlap["Set_FIA3"],
+  model.matrix(~ ctrl_ - 1, data = qc_overlap["ctrl_"]),
+  model.matrix(~ case_ - 1, data = qc_overlap["case_"])
+)
+UpSetR::upset(
+  qc_overlap2,
+  #nsets = 8, 
+  sets = c("ctrl_0.4h",
+           "case_0.4h",
+           "ctrl_4.6h",
+           "case_4.6h",
+           "ctrl_6.8h",
+           "case_6.8h",
+           "ctrl_.8h",
+           "case_.8h"),
+  keep.order = TRUE
+)
+```
+Conclusion: 12 pairs where fasted subjects were matched with recently fed subjects.
+
+# QC: FIA missing values
+
+## A. Pre-imputation diagnostics
+
+Percent missing per variable (n = 448):
+
+```{r}
+preproc$mice_fia$functions$show_missing(
+  qc$fia
+)
+naniar::vis_miss(qc$fia)
+naniar::vis_miss(subset(qc$fia, Case_control == "Ctrl"))
+naniar::vis_miss(subset(qc$fia, Case_control == "Case"))
+```
+
+OBS! The whole FIA data set (n = 3638) is used for imputation of clinical
+variables. Missing values are imputed using MICE.
+
+Percent missing per variable (n = 3638):
+
+```{r}
+dim(preproc$raw_fia$data_out)
+preproc$mice_fia$data$percent_missing
+preproc$mice_fia$plots$vismissplot
+```
+
+Fluxplot shows if imputation for selected variables is feasible:
+
+```{r}
+mice::fluxplot(preproc$raw_fia$data_out[imp_fia_vars])
+```
+
+## B. Post-imputation diagnostics 
+
+Density and stripplots post-imputation shows imputed variables were within
+reasonable ranges:
+
+```{r}
+preproc$mice_fia$plots$mice_density
+preproc$mice_fia$plots$mice_stripplot
+```
+
+## C. Outlier check
+
+```{r}
+boxplot(
+  sapply(
+    Filter(is.numeric, preproc$imp_fia),
+    scale
+  )
+)
+```

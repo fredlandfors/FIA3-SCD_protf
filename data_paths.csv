@@ -1,0 +1,6 @@
+﻿data;absolute_path
+pea_sampledata;~/projekt_data/2019-11-19_SCD-FIA3_data/2019-04-23_FIA3-SCD_PEA-ASSAY_Inflammation-Organ-damage_s1-s450.csv
+pea_metadata;~/projekt_data/2019-11-19_SCD-FIA3_data/2020-12-02_FIA3-SCD_PEA-ASSAY_Inflammation-Organ-damage_variable-metadata.csv
+clin_sampledata;~/projekt_data/2019-11-19_SCD-FIA3_data/2020-04-15_FIA3-SCD_Sample-Metadata_ALL.csv
+clin_metadata;~/projekt_data/2019-11-19_SCD-FIA3_data/2020-06-22_FIA3-SCD_Sample-Metadata-ALL_Variable-Metadata.csv
+markdown;~/projekt_data/2019-11-19_SCD-FIA3_data/rData/markdown.RData
